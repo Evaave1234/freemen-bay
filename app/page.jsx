@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getBackend, IS_DEMO } from "../lib/backend";
+import { getBackend, IS_DEMO, ORGANIZER_DOMAIN } from "../lib/backend";
 import { CAP, WEEKDAYS, todayNZ, upcoming, label, info, dowOf } from "../lib/sessions";
 import { myToken, getMine, setMine } from "../lib/local";
 import ZoomViewer from "../components/ZoomViewer";
@@ -142,7 +142,9 @@ export default function Page() {
   };
 
   const doLogin = async () => {
-    const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password: pass });
+    const acct = email.trim();
+    const login = acct.includes("@") ? acct : `${acct}@${ORGANIZER_DOMAIN}`;
+    const { error } = await sb.auth.signInWithPassword({ email: login, password: pass });
     if (error) { setLoginErr("Login failed. 登录失败。"); return; }
     setPass(""); setShowLogin(false);
   };
@@ -170,7 +172,7 @@ export default function Page() {
 
         {IS_DEMO && (
           <div className="admin-bar" style={{ borderColor: "var(--kid)" }}>
-            Preview mode — sign-ups here are not saved. Organizer login accepts any email/password.
+            Preview mode — sign-ups here are not saved. Organizer login accepts any account/password.
             <Zh inline>预览模式：这里的报名不会保存，管理员登录随便输入即可。</Zh>
           </div>
         )}
@@ -237,7 +239,7 @@ export default function Page() {
         <div className="overlay">
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="l-title">
             <h2 id="l-title">Organizer login<Zh>管理员登录</Zh></h2>
-            <input type="email" placeholder="Email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input type="text" inputMode="numeric" placeholder="Account number 账号" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} />
             <input type="password" placeholder="Password 密码" autoComplete="current-password" value={pass}
               onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLogin()} />
             <div className="err">{loginErr}</div>

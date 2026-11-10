@@ -12,7 +12,11 @@ Next.js + Supabase，静态导出后部署在 Netlify。
 - `supabase/setup.sql` 数据库设置，在 Supabase SQL Editor 里运行一次
 
 ## 第一次设置
-1. Supabase：在 SQL Editor 运行 `supabase/setup.sql`；在 Authentication 里建你的管理员账号，并关闭 “Allow new users to sign up”。
+1. Supabase：在 SQL Editor 运行 `supabase/setup.sql`（以后改了这个文件，整份重新运行一次即可）。
+   建管理员账号：Authentication → Users → Add user → Create new user，
+   Email 填 `123456@example.com`，密码自己填，勾选 “Auto Confirm User”。
+   网站上登录时只需要输入账号 `123456` 和密码。数据库只认这一个账号是管理员。
+   然后 Authentication → Sign In / Providers，关闭 “Allow new users to sign up”。
 2. 把整个文件夹推送到 GitHub（Private 仓库）。
 3. Netlify：Add new site → Import an existing project → GitHub → 选这个仓库。
    构建设置会自动读取 `netlify.toml`（Build command `npm run build`，Publish directory `out`）。

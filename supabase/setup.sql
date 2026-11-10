@@ -1,6 +1,15 @@
 -- Freemans Bay Beginner Badminton — database setup
 -- Paste ALL of this into Supabase → SQL Editor → New query → Run.
 
+-- 0) Only ONE account is the organizer: account number 123456 (logs in as 123456@example.com).
+--    Even if someone else manages to log in, the database refuses them.
+create or replace function public.is_organizer()
+returns boolean language sql stable set search_path = public as $$
+  select coalesce(lower(auth.jwt() ->> 'email'), '') = '123456@example.com';
+$$;
+revoke all on function public.is_organizer() from public;
+grant execute on function public.is_organizer() to authenticated;
+
 -- 1) Session details (only the logged-in organizer can change them)
 create table if not exists public.settings (
   id int primary key default 1 check (id = 1),
@@ -20,7 +29,7 @@ alter table public.settings enable row level security;
 drop policy if exists "anyone can read settings" on public.settings;
 create policy "anyone can read settings" on public.settings for select using (true);
 drop policy if exists "organizer updates settings" on public.settings;
-create policy "organizer updates settings" on public.settings for update to authenticated using (true) with check (true);
+create policy "organizer updates settings" on public.settings for update to authenticated using (public.is_organizer()) with check (public.is_organizer());
 revoke all on public.settings from anon, authenticated;
 grant select on public.settings to anon, authenticated;
 grant update on public.settings to authenticated;
@@ -40,11 +49,11 @@ create index if not exists signups_session_idx on public.signups (session);
 
 alter table public.signups enable row level security;
 drop policy if exists "organizer reads signups" on public.signups;
-create policy "organizer reads signups" on public.signups for select to authenticated using (true);
+create policy "organizer reads signups" on public.signups for select to authenticated using (public.is_organizer());
 drop policy if exists "organizer updates signups" on public.signups;
-create policy "organizer updates signups" on public.signups for update to authenticated using (true) with check (true);
+create policy "organizer updates signups" on public.signups for update to authenticated using (public.is_organizer()) with check (public.is_organizer());
 drop policy if exists "organizer deletes signups" on public.signups;
-create policy "organizer deletes signups" on public.signups for delete to authenticated using (true);
+create policy "organizer deletes signups" on public.signups for delete to authenticated using (public.is_organizer());
 revoke all on public.signups from anon, authenticated;
 grant select, delete on public.signups to authenticated;
 grant update (paid) on public.signups to authenticated;
