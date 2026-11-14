@@ -58,6 +58,21 @@ revoke all on public.signups from anon, authenticated;
 grant select, delete on public.signups to authenticated;
 grant update (paid) on public.signups to authenticated;
 
+-- 3) Organizer's private notes per person (phone number, group). Players can never read this.
+--    Matched to sign-ups by name (not case-sensitive).
+create table if not exists public.people (
+  name_key text primary key check (name_key = lower(btrim(name_key)) and char_length(name_key) between 1 and 40),
+  name text not null check (char_length(name) <= 40),
+  phone text not null default '' check (char_length(phone) <= 30),
+  grp text not null default '' check (char_length(grp) <= 40),
+  updated_at timestamptz not null default now()
+);
+alter table public.people enable row level security;
+drop policy if exists "organizer manages people" on public.people;
+create policy "organizer manages people" on public.people for all to authenticated using (public.is_organizer()) with check (public.is_organizer());
+revoke all on public.people from anon, authenticated;
+grant select, insert, update, delete on public.people to authenticated;
+
 -- Public list of upcoming sign-ups (never exposes the private owner_token)
 create or replace function public.list_signups()
 returns table (id uuid, session text, name text, kid boolean, paid boolean, created_at timestamptz)
@@ -68,7 +83,7 @@ language sql stable security definer set search_path = public as $$
   order by created_at;
 $$;
 
--- Add a name: only Tue/Fri, only this week or next week (Auckland time),
+-- Add a name: only Tue/Fri, only within the next 14 days (the next two Tuesdays and Fridays, Auckland time),
 -- not after the last day in settings, and max 12 per session.
 create or replace function public.add_signup(p_session text, p_name text, p_kid boolean, p_token uuid)
 returns uuid language plpgsql security definer set search_path = public as $$
@@ -80,7 +95,7 @@ declare
 begin
   begin v_date := p_session::date; exception when others then raise exception 'CLOSED'; end;
   if p_session !~ '^\d{4}-\d{2}-\d{2}$' then raise exception 'CLOSED'; end if;
-  v_last := (date_trunc('week', v_today)::date + 13);  -- Sunday of next week
+  v_last := v_today + 13;  -- rolling: next two of each weekday
   select coalesce((data->>'end')::date, v_last) into v_end from public.settings where id = 1;
   if extract(isodow from v_date) not in (2, 5)
      or v_date < v_today or v_date > v_last or v_date > coalesce(v_end, v_last) then
@@ -97,10 +112,24 @@ begin
   return v_id;
 end $$;
 
--- Remove your own name (works from the same phone/browser that added it)
+-- Remove your own name (works from the same phone/browser that added it).
+-- Not allowed within 24 hours of the session start (start = first time in the session's "Time", Auckland).
 create or replace function public.remove_my_signup(p_id uuid, p_token uuid)
 returns boolean language plpgsql security definer set search_path = public as $$
+declare
+  v_session text; v_key text; v_time text; v_m text[]; v_h int; v_start timestamptz;
 begin
+  select session into v_session from public.signups where id = p_id and owner_token = p_token;
+  if v_session is null then return false; end if;
+  v_key := case extract(isodow from v_session::date) when 2 then 'tue' when 5 then 'fri' end;
+  select coalesce(data->'dates'->v_session->>'time', data->'weekly'->v_key->>'time') into v_time from public.settings where id = 1;
+  v_m := regexp_match(coalesce(v_time, ''), '(\d{1,2})(?::(\d{2}))?\s*(am|pm)', 'i');
+  if v_m is null then
+    v_m := case v_key when 'tue' then array['8','45','pm'] else array['7','30','pm'] end;
+  end if;
+  v_h := (v_m[1]::int % 12) + case when lower(v_m[3]) = 'pm' then 12 else 0 end;
+  v_start := (v_session::date + make_time(v_h, coalesce(v_m[2], '0')::int, 0)) at time zone 'Pacific/Auckland';
+  if now() >= v_start - interval '24 hours' then raise exception 'LOCKED'; end if;
   delete from public.signups where id = p_id and owner_token = p_token;
   return found;
 end $$;

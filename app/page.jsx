@@ -1,10 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBackend, IS_DEMO, ORGANIZER_DOMAIN } from "../lib/backend";
-import { CAP, WEEKDAYS, todayNZ, upcoming, label, info, dowOf } from "../lib/sessions";
+import { CAP, WEEKDAYS, todayNZ, upcoming, label, info, dowOf, locked } from "../lib/sessions";
 import { myToken, getMine, setMine } from "../lib/local";
 import ZoomViewer from "../components/ZoomViewer";
 
+const keyOf = (n) => String(n).trim().toLowerCase();
 const Zh = ({ children, inline, style }) => <span className={inline ? "zh-i" : "zh"} style={style}>{children}</span>;
 
 export default function Page() {
@@ -13,6 +14,9 @@ export default function Page() {
   const [config, setConfig] = useState({});
   const [rows, setRows] = useState([]);
   const [history, setHistory] = useState([]);
+  const [people, setPeople] = useState({});
+  const [person, setPerson] = useState(null);
+  const [dayTab, setDayTab] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState("Loading… 加载中…");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -46,9 +50,13 @@ export default function Page() {
       setRows(l.data || []);
       setLoaded(true);
       if (adminRef.current) {
-        const h = await sb.from("signups").select("id,session,name,kid,paid,created_at");
+        const [h, pp] = await Promise.all([
+          sb.from("signups").select("id,session,name,kid,paid,created_at"),
+          sb.from("people").select("name_key,name,phone,grp"),
+        ]);
         if (!h.error) setHistory(h.data || []);
-      } else setHistory([]);
+        if (!pp.error) setPeople(Object.fromEntries((pp.data || []).map((p) => [p.name_key, p])));
+      } else { setHistory([]); setPeople({}); }
       setStatus("");
     } catch (e) {
       setStatus("Can’t connect right now; the list may be out of date. 暂时连不上，名单可能不是最新的。");
@@ -113,7 +121,7 @@ export default function Page() {
     let error;
     if (isAdmin) ({ error } = await sb.from("signups").delete().eq("id", id));
     else ({ error } = await sb.rpc("remove_my_signup", { p_id: id, p_token: myToken() }));
-    if (error) setStatus("Couldn’t remove. 删除没有成功。");
+    if (error) setStatus(/LOCKED/.test(error.message || "") ? "Less than 24 hours to go, so you can’t remove your name. Please contact the organizer. 开场前24小时内不能取消，请联系组织者。" : "Couldn’t remove. 删除没有成功。");
     else { const next = getMine().filter((x) => x !== id); setMine(next); setMineState(next); }
     await load();
   };
@@ -126,6 +134,20 @@ export default function Page() {
     await load();
   };
 
+  const openPerson = (name) => {
+    const p = people[keyOf(name)] || {};
+    setPerson({ name: String(name).trim(), phone: p.phone || "", grp: p.grp || "", err: "" });
+  };
+  const savePerson = async () => {
+    const key = keyOf(person.name), phone = person.phone.trim(), grp = person.grp.trim();
+    const { error } = phone || grp
+      ? await sb.from("people").upsert({ name_key: key, name: person.name, phone, grp, updated_at: new Date().toISOString() })
+      : await sb.from("people").delete().eq("name_key", key);
+    if (error) { setPerson({ ...person, err: "Couldn’t save — please log in again. 保存没有成功，请重新登录。" }); return; }
+    setPeople((p) => { const n = { ...p }; if (phone || grp) n[key] = { name_key: key, name: person.name, phone, grp }; else delete n[key]; return n; });
+    setPerson(null);
+  };
+
   const startEdit = (u) => { setEditVals(info(config, u.date, u.w)); setEditing(u.date); };
 
   const saveConfig = async () => {
@@ -135,7 +157,7 @@ export default function Page() {
     const dates = { ...(config.dates || {}) };
     ups.filter((x) => x.w.key === u.w.key && x.date !== u.date && !dates[x.date]).forEach((x) => { dates[x.date] = info(config, x.date, x.w); });
     dates[u.date] = vals;
-    const next = { ...config, dates, weekly: { ...(config.weekly || {}), [u.w.key]: vals } };
+    const next = { ...config, dates, weekly: { ...(config.weekly || {}), [u.w.key]: { ...vals, courts: "" } } };
     const { data, error } = await sb.from("settings").update({ data: next, updated_at: new Date().toISOString() }).eq("id", 1).select("id");
     if (error || !data || !data.length) { setStatus("Couldn’t save — please log in again. 保存没有成功，请重新登录。"); return; }
     setConfig(next); setEditing(null);
@@ -150,6 +172,7 @@ export default function Page() {
   };
 
   const ups = mounted ? upcoming(config) : [];
+  const tab = dayTab || (ups[0] && ups[0].w.key) || WEEKDAYS[0].key;
 
   return (
     <>
@@ -184,23 +207,30 @@ export default function Page() {
           </div>
         )}
 
+        <div className="daytabs" role="tablist">
+          {WEEKDAYS.map((w) => (
+            <button key={w.key} role="tab" aria-selected={tab === w.key} className={tab === w.key ? "on" : ""} onClick={() => setDayTab(w.key)}>
+              {w.day}<Zh inline>{w.zh}</Zh>
+            </button>
+          ))}
+        </div>
         <div className="grid">
           {WEEKDAYS.map((w) => {
             const list = ups.filter((u) => u.w.key === w.key);
             return (
-              <div className="col" key={w.key}>
+              <div className={"col" + (tab === w.key ? " on" : "")} key={w.key}>
                 <h2 className="col-h">{w.day}<Zh>{w.zh}</Zh></h2>
                 {mounted && !list.length && (
                   <div className="card"><span className="empty" style={{ margin: 0 }}>No more sessions<Zh inline>没有更多场次</Zh></span></div>
                 )}
                 {list.map((u) => (
-                  <SessionCard key={u.date} u={u} c={info(config, u.date, u.w)} rows={rows.filter((r) => r.session === u.date)}
+                  <SessionCard key={u.date} u={u} c={info(config, u.date, u.w)} lock={locked(config, u.date, u.w)} rows={rows.filter((r) => r.session === u.date)}
                     isAdmin={isAdmin} mine={mine} pending={pending} busy={busy} agreed={agreed && loaded} declined={declined}
                     editing={editing === u.date} editVals={editVals} setEditVals={setEditVals}
                     onEdit={() => startEdit(u)} onSave={saveConfig} onCancel={() => setEditing(null)}
                     form={forms[u.date] || { name: "", kid: false }}
                     setForm={(v) => setForms((p) => ({ ...p, [u.date]: v }))}
-                    onAdd={() => addEntry(u.date)} onDel={delEntry} onPaid={setPaid}
+                    onAdd={() => addEntry(u.date)} onDel={delEntry} onPaid={setPaid} people={people} onPerson={openPerson}
                     onReread={() => setShowNotice(true)} />
                 ))}
               </div>
@@ -208,7 +238,7 @@ export default function Page() {
           })}
         </div>
 
-        {isAdmin && <Stats history={history} onPaid={setPaid} />}
+        {isAdmin && <Stats history={history} onPaid={setPaid} people={people} onPerson={openPerson} />}
 
         <div className="status">{status}</div>
         {!isAdmin && (
@@ -227,6 +257,8 @@ export default function Page() {
             <h2 id="n-title">Please note<Zh>请注意</Zh></h2>
             <p>Just a friendly heads-up: the ceiling at the Freemans Bay venue is a little low. If that’s a concern for you, it may be best not to come.</p>
             <p className="zh" style={{ fontSize: ".9rem" }}>Freemans Bay 场地的天花板会比较矮，如果您介意，请不要来。</p>
+            <p><b>Cancelling:</b> please cancel at least 24 hours before the session starts. Within 24 hours you can’t remove your name, and if no one takes your spot you still need to pay.</p>
+            <p className="zh" style={{ fontSize: ".9rem" }}><b>取消：</b>请至少在开场前 24 小时取消。开场前 24 小时内不能删除名字；如果没有人替补，仍需付款。</p>
             <div className="btns">
               <button className="ghost" onClick={() => { setAgreed(false); setDeclined(true); setShowNotice(false); }}>Cancel<Zh inline>取消</Zh></button>
               <button className="primary" onClick={() => { setAgreed(true); setDeclined(false); setShowNotice(false); }}>OK<Zh inline>好的</Zh></button>
@@ -234,6 +266,33 @@ export default function Page() {
           </div>
         </div>
       )}
+
+      {person && (() => {
+        const groups = [...new Set(Object.values(people).map((p) => p.grp).filter(Boolean))].sort();
+        const mates = person.grp.trim() ? Object.values(people).filter((p) => p.grp === person.grp.trim() && p.name_key !== keyOf(person.name)).map((p) => p.name) : [];
+        return (
+          <div className="overlay" onClick={(e) => e.target === e.currentTarget && setPerson(null)}>
+            <div className="modal" role="dialog" aria-modal="true" aria-labelledby="p-title">
+              <h2 id="p-title">{person.name}</h2>
+              <p className="paidnote" style={{ marginTop: 0 }}>Only you (organizer) can see this.<Zh inline>只有管理员能看到。</Zh></p>
+              <label className="paidnote">Phone 电话
+                <input type="tel" value={person.phone} onChange={(e) => setPerson({ ...person, phone: e.target.value })} placeholder="e.g. 021 123 4567" maxLength={30} />
+              </label>
+              {person.phone.trim() && <p style={{ marginTop: 6 }}><a href={"tel:" + person.phone.replace(/[^\d+]/g, "")}>Call {person.phone.trim()}<Zh inline>拨打</Zh></a></p>}
+              <label className="paidnote" style={{ display: "block", marginTop: 12 }}>Group 同一组（same name = same group 组名相同即为同组）
+                <input type="text" list="grp-list" value={person.grp} onChange={(e) => setPerson({ ...person, grp: e.target.value })} placeholder="e.g. Wang family" maxLength={40} />
+                <datalist id="grp-list">{groups.map((g) => <option key={g} value={g} />)}</datalist>
+              </label>
+              {mates.length > 0 && <p className="paidnote" style={{ marginTop: 6 }}>Same group 同组：{mates.join(", ")}</p>}
+              <div className="err">{person.err}</div>
+              <div className="btns">
+                <button className="ghost" onClick={() => setPerson(null)}>Cancel<Zh inline>取消</Zh></button>
+                <button className="primary" onClick={savePerson}>Save<Zh inline>保存</Zh></button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {showLogin && (
         <div className="overlay">
@@ -254,15 +313,15 @@ export default function Page() {
   );
 }
 
-function SessionCard({ u, c, rows, isAdmin, mine, pending, busy, agreed, declined, editing, editVals, setEditVals,
-  onEdit, onSave, onCancel, form, setForm, onAdd, onDel, onPaid, onReread }) {
+function SessionCard({ u, c, lock, rows, isAdmin, mine, pending, busy, agreed, declined, editing, editVals, setEditVals,
+  onEdit, onSave, onCancel, form, setForm, onAdd, onDel, onPaid, onReread, people, onPerson }) {
   const lb = label(u.date), full = rows.length >= CAP;
   const tbc = <>TBC<Zh inline>待定</Zh></>;
   const paidN = rows.filter((r) => r.paid).length;
   const field = (k) => ({ value: editVals[k] || "", onChange: (e) => setEditVals({ ...editVals, [k]: e.target.value }) });
   return (
     <section className="card">
-      <div className="wk">{u.thisWeek ? "This week · 本周" : "Next week · 下周"}</div>
+      <div className="wk">{["This week · 本周", "Next week · 下周", "Week after next · 下下周"][u.week]}</div>
       <h3 className="day">{u.w.day.slice(0, 3)} {lb.en}<Zh>{lb.zh} {u.w.zh}</Zh></h3>
 
       {editing ? (
@@ -294,19 +353,20 @@ function SessionCard({ u, c, rows, isAdmin, mine, pending, busy, agreed, decline
       <ol>
         {!rows.length && <li className="empty">No one yet<Zh inline>还没有人报名</Zh></li>}
         {rows.map((e) => {
-          const canDel = isAdmin || mine.includes(e.id);
+          const isMine = mine.includes(e.id), canDel = isAdmin || (isMine && !lock);
           return (
             <li key={e.id}>
               <div className="row">
-                {isAdmin
-                  ? <button className={"pay" + (e.paid ? " on" : "")} onClick={() => onPaid(e.id, !e.paid)} title="Paid 已付款" aria-label="Paid">{e.paid ? "✓" : ""}</button>
-                  : <span className={"pay" + (e.paid ? " on" : "")} title={e.paid ? "Paid 已付款" : "Not paid yet 未付款"}>{e.paid ? "✓" : ""}</span>}
-                <span>{e.name}</span>
+                {isAdmin && <button className={"pay" + (e.paid ? " on" : "")} onClick={() => onPaid(e.id, !e.paid)} title="Paid 已付款" aria-label="Paid">{e.paid ? "✓" : ""}</button>}
+                {isAdmin ? <button className="who" onClick={() => onPerson(e.name)}>{e.name}</button> : <span>{e.name}</span>}
                 {e.kid && <span className="tag">Kid · 小孩</span>}
-                {canDel && (
+                {isAdmin && people[keyOf(e.name)]?.grp && <span className="gtag">{people[keyOf(e.name)].grp}</span>}
+                {canDel ? (
                   <button className="x" onClick={() => onDel(e.id)}>
                     {pending === e.id ? <>Tap again to confirm<Zh inline>再点一次确认删除</Zh></> : <>Remove<Zh inline>删除</Zh></>}
                   </button>
+                ) : isMine && (
+                  <span className="x" style={{ cursor: "default" }}>Within 24h, can’t remove<Zh inline>24小时内不能取消</Zh></span>
                 )}
               </div>
             </li>
@@ -329,7 +389,7 @@ function SessionCard({ u, c, rows, isAdmin, mine, pending, busy, agreed, decline
   );
 }
 
-function Stats({ history, onPaid }) {
+function Stats({ history, onPaid, people, onPerson }) {
   const t = todayNZ(), groups = {};
   history.forEach((r) => {
     const k = String(r.name).trim().toLowerCase();
@@ -337,14 +397,14 @@ function Stats({ history, onPaid }) {
   });
   const arr = Object.values(groups).map((g) => {
     const unpaid = g.items.filter((r) => !r.paid).sort((a, b) => (a.session < b.session ? -1 : 1));
-    return { ...g, unpaid, owed: unpaid.filter((r) => r.session <= t).length };
-  }).sort((a, b) => b.owed - a.owed || b.items.length - a.items.length || a.name.localeCompare(b.name));
+    return { ...g, unpaid, paid: g.items.length - unpaid.length, owed: unpaid.filter((r) => r.session <= t).length };
+  }).sort((a, b) => b.owed - a.owed || b.unpaid.length - a.unpaid.length || b.items.length - a.items.length || a.name.localeCompare(b.name));
 
   return (
     <section className="card stats">
       <h2 className="col-h">Sign-ups &amp; payments<Zh>报名次数与付款统计</Zh></h2>
-      <div className="paidnote">All sessions so far, grouped by name. Red dates are unpaid sessions that have already happened; grey ones are upcoming. Tap a date to mark it paid.
-        <Zh>按名字统计所有场次。红框日期是已经打过但还没付款的，灰框是还没到的场次。点日期即可标记已付款。</Zh></div>
+      <div className="paidnote">All sessions, grouped by name. Ticking or unticking a name’s box updates Unpaid straight away. Red dates are unpaid sessions that have already happened; grey ones are upcoming. Tap a date to mark it paid.
+        <Zh>按名字统计所有场次。勾选或取消勾选名字前的方框，未付次数会马上更新。红框是已经打过但还没付款的，灰框是还没到的场次。点日期即可标记已付款。</Zh></div>
       {!arr.length ? (
         <div className="paidnote" style={{ marginTop: 12 }}>No sign-ups yet<Zh inline>还没有报名记录</Zh></div>
       ) : (
@@ -357,9 +417,10 @@ function Stats({ history, onPaid }) {
               <tbody>
                 {arr.map((g) => (
                   <tr key={g.name.toLowerCase()}>
-                    <td>{g.name}{g.items.some((r) => r.kid) && <> <span className="tag">Kid · 小孩</span></>}</td>
+                    <td><button className="who" onClick={() => onPerson(g.name)}>{g.name}</button>{g.items.some((r) => r.kid) && <> <span className="tag">Kid · 小孩</span></>}
+                      {people[keyOf(g.name)]?.grp && <> <span className="gtag">{people[keyOf(g.name)].grp}</span></>}</td>
                     <td>{g.items.length}</td>
-                    <td className={g.owed ? "owe" : ""}>{g.owed}</td>
+                    <td className={g.owed ? "owe" : ""}>{g.unpaid.length}</td>
                     <td>
                       {g.unpaid.length ? g.unpaid.map((r) => {
                         const w = WEEKDAYS.find((x) => x.dow === dowOf(r.session)), lb = label(r.session);

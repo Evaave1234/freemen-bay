@@ -1,6 +1,6 @@
 # Freemans Bay Beginner Badminton 报名网站
 
-Next.js + Supabase，静态导出后部署在 Netlify。
+Next.js + Supabase，静态导出后部署在 Vercel：https://freemans-bay-badminton.vercel.app
 
 ## 文件说明
 - `app/page.jsx` 网页主体（标题、提示文字、报名卡片、管理员统计）
@@ -18,16 +18,14 @@ Next.js + Supabase，静态导出后部署在 Netlify。
    网站上登录时只需要输入账号 `123456` 和密码。数据库只认这一个账号是管理员。
    然后 Authentication → Sign In / Providers，关闭 “Allow new users to sign up”。
 2. 把整个文件夹推送到 GitHub（Private 仓库）。
-3. Netlify：Add new site → Import an existing project → GitHub → 选这个仓库。
-   构建设置会自动读取 `netlify.toml`（Build command `npm run build`，Publish directory `out`）。
-4. Netlify → Site configuration → Environment variables，添加：
+3. Vercel：项目名 `freemans-bay-badminton`。Settings → Environment Variables（Production）里有：
    - `NEXT_PUBLIC_SUPABASE_URL` = 你的 Project URL
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` = 你的 Publishable key（sb_publishable_ 开头）
-   然后 Deploys → Trigger deploy → Deploy site。
    ⚠️ 不要把 Secret key / service_role key 或任何密码放进代码或环境变量。
 
 ## 以后修改
-在 VS Code 改文件 → 保存 → Source Control 里 Commit → Sync Changes。Netlify 会自动重新发布。
+在 VS Code 改文件 → 保存 → 在项目文件夹运行 `npx vercel deploy --prod` 发布。
+改了 `supabase/setup.sql` 的话，要在 SQL Editor 里整份重新运行一次。
 
 ## 本地预览（可选）
 需要先安装 Node.js 20：
